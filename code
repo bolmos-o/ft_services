@@ -1,0 +1,150 @@
+FROM    alpine:3.13
+
+RUN	apk add wget nginx php-fpm php-mysqli php-json
+RUN     wget https://wordpress.org/latest.tar.gz && \
+        tar -xf latest.tar.gz && \
+        rm latest.tar.gz
+RUN     mkdir /run/nginx
+
+COPY    default.conf /etc/nginx/http.d/
+
+EXPOSE  5050
+
+CMD     php-fpm7 && nginx -g 'daemon off;'
+
+
+server {
+    listen 5050;
+    root /wordpress;
+    index index.php index.html;
+    location ~\.php$ {
+        fastcgi_pass 127.0.0.1:9000;
+        fastcgi_index   index.php;
+        include         fastcgi.conf;
+    }
+}
+
+FROM    alpine:3.13
+
+RUN     apk update && apk add mysql mysql-client
+RUN     mkdir /run/mysqld
+RUN     mysql_install_db --datadir=/var/lib/mysql --user=mysql
+
+CMD     ["mysqld", "-u", "root"]
+
+
+
+docker build -t wordpress srcs/wordpress/
+docker build -t mysql srcs/mysql/
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+spec:
+  ports:
+  - port : 3306
+    targetPort: 3306
+  selector:
+    db: mysql
+  type: ClusterIP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pv-claim
+  labels:
+    db: mysql
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 200Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  labels:
+    db: mysql
+spec:
+  selector:
+    matchLabels:
+      db: mysql
+  template:
+    metadata:
+      labels:
+        db: mysql
+    spec:
+      containers:
+      - image: mysql
+        name: mysql
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 3306
+          name: mysql
+        volumeMounts:
+        - name: mysql-ps
+          mountPath: /var/lib/mysql
+      volumes:
+      - name: mysql-ps
+        persistentVolumeClaim:
+          claimName: mysql-pv-claim
+
+
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: wordpress
+spec:
+  ports:
+  - port : 5050
+    targetPort: 5050
+  selector:
+    app: wordpress
+  type: LoadBalancer
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wp-pv-claim
+  labels:
+    app: wordpress
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wordpress
+  labels:
+    app: wordpress
+spec:
+  selector:
+    matchLabels:
+      app: wordpress
+  template:
+    metadata:
+      labels:
+        app: wordpress
+    spec:
+      containers:
+      - image: wordpress
+        name: wordpress
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 5050
+          name: wordpress
+        volumeMounts:
+        - name: wp-ps
+          mountPath: /wordpress/files
+      volumes:
+      - name: wp-ps
+        persistentVolumeClaim:
+          claimName: wp-pv-claim
